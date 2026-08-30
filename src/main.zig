@@ -7,7 +7,7 @@ const Address = net.IpAddress;
 const httpz = @import("httpz");
 const ows = @import("ows");
 
-const listen_address = "127.0.0.1";
+const listen_address = "0.0.0.0";
 const listen_port = 8989;
 
 const Command = enum {
@@ -16,8 +16,8 @@ const Command = enum {
 };
 
 pub fn main(init: std.process.Init) !void {
-    const arena = init.arena.allocator();
-    const args = try std.process.Args.toSlice(init.minimal.args, arena);
+    const io = init.io;
+    const args = try std.process.Args.toSlice(init.minimal.args, init.gpa);
 
     if (args.len < 2) return printUsage();
 
@@ -27,7 +27,7 @@ pub fn main(init: std.process.Init) !void {
     };
 
     switch (cmd) {
-        .serve => try runServe(init.io, init.gpa, args),
+        .serve => try runServe(io, init.gpa, args),
         .connect => {},
     }
 }
@@ -66,30 +66,17 @@ fn runServe(io: Io, allocator: Allocator, args: ([]const [:0]const u8)) !void {
         return printServeUsage();
     }
 
-    // const from = args[2];
+    const from = args[2];
     const to = if (args.len >= 4) args[3] else "127.0.0.1";
 
-    // const from_addr = try parseLocation(from);
+    const from_addr = try parseLocation(from);
     const to_addr = try parseLocation(to);
 
-    var srv = try ServeHandle.init(io, allocator, to_addr);
+    var srv = try Server.init(io, allocator, to_addr, from_addr);
     defer srv.deinit();
 
     try srv.listen();
 
-    // var server = try serveListenHTTP(io, allocator, to_addr);
-    //
-    // const server_thread = try server.listenInNewThread();
-    // // _ = try server.listenInNewThread();
-    //
-    // defer {
-    //     server.stop();
-    //     server_thread.join();
-    //     server_thread.detach();
-    //     server.deinit();
-    // }
-
-    // 3. Keep the main thread useful (e.g., waiting for user exit command)
     var buf: [128]u8 = undefined;
 
     const stdin_file = std.Io.File.stdin();
@@ -98,8 +85,6 @@ fn runServe(io: Io, allocator: Allocator, args: ([]const [:0]const u8)) !void {
     std.debug.print("Press ENTER to stop the server...\n", .{});
     _ = try stdin.interface.takeDelimiterInclusive('\n');
     std.debug.print("Stopping server...\n", .{});
-
-    // return serveListen(io, to_addr, from_addr);
 }
 
 fn serveConnect(io: Io, addr: net.IpAddress) !net.Stream {
@@ -182,25 +167,34 @@ fn serveListenHandle(io: Io, stream: net.Stream, peer_stream: net.Stream) !void 
     }
 }
 
-const ServeHandle = struct {
+const Server = struct {
     const Self = @This();
 
-    server: *httpz.Server(void),
+    server: *httpz.Server(*Handler),
     listen_thread: ?std.Thread,
+    handler: *Handler,
     allocator: std.mem.Allocator,
 
-    pub fn init(io: Io, allocator: Allocator, address: Address) !ServeHandle {
-        const server = try allocator.create(httpz.Server(void));
+    pub fn init(io: Io, allocator: Allocator, listen_addr: Address, peer_addr: Address) !Server {
+        const server = try allocator.create(httpz.Server(*Handler));
         errdefer allocator.destroy(server);
 
-        server.* = try httpz.Server(void).init(io, allocator, .{
-            .address = .{ .ip = address },
-        }, {});
+        const handler = try Handler.init(io, allocator, peer_addr);
+        errdefer allocator.destroy(handler);
+
+        server.* = try httpz.Server(*Handler).init(io, allocator, .{
+            .address = .{ .ip = listen_addr },
+            .thread_pool = .{ .count = 1 },
+        }, handler);
+
+        var router = try server.router(.{});
+        router.get("/ping", Handler.ping, .{});
 
         return .{
             .allocator = allocator,
             .server = server,
             .listen_thread = null,
+            .handler = handler,
         };
     }
 
@@ -208,6 +202,7 @@ const ServeHandle = struct {
         self.server.stop();
         defer self.server.deinit();
         defer self.allocator.destroy(self.server);
+        defer self.handler.deinit(self.allocator);
 
         if (self.listen_thread) |thread| {
             thread.join();
@@ -222,15 +217,64 @@ const ServeHandle = struct {
     }
 };
 
-fn serveListenHTTP(io: Io, allocator: Allocator, address: Address) !httpz.Server(void) {
-    const server = try httpz.Server(void).init(io, allocator, .{
-        .address = .{ .ip = address },
-    }, {});
+const Handler = struct {
+    io: Io,
+    tcp_peer_address: Address,
 
-    // const srv = try ServeHandle.init(io, allocator, address);
-    // _ = srv;
+    pub fn init(io: Io, allocator: Allocator, tcp_peer_address: Address) !*Handler {
+        const self = try allocator.create(Handler);
+        errdefer allocator.destroy(self);
 
-    // _ = try server.listenInNewThread();
-    std.debug.print("thread: {f}\n", .{server.config.address});
-    return server;
-}
+        self.io = io;
+        self.tcp_peer_address = tcp_peer_address;
+
+        return self;
+    }
+
+    pub fn deinit(self: *Handler, allocator: Allocator) void {
+        allocator.destroy(self);
+    }
+
+    pub fn notFound(_: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
+        const upgraded = try httpz.upgradeWebsocket(WebsocketHandler, req, res, WebsocketContext{});
+        if (!upgraded) {
+            res.status = 400;
+            res.body = "Invalid websocket handshake";
+            return;
+        }
+    }
+
+    pub fn ping(_: *Handler, _: *httpz.Request, res: *httpz.Response) !void {
+        res.body = "pong";
+    }
+
+    const WebsocketContext = struct {};
+
+    pub const WebsocketHandler = struct {
+        conn: *httpz.websocket.Conn,
+
+        pub fn init(conn: *httpz.websocket.Conn, _: WebsocketContext) !WebsocketHandler {
+            return .{ .conn = conn };
+        }
+
+        pub fn clientMessage(self: *WebsocketHandler, data: []const u8) !void {
+            try self.conn.write(data);
+        }
+    };
+
+    pub fn connectPeer(self: *Handler) !void {
+        _ = self.tcp_peer_address.connect(self.io, .{
+            .mode = .stream,
+            .protocol = .tcp,
+        }) catch |err| {
+            std.debug.print("connection to target failed: {f}: {s}\n\n", .{ self.tcp_peer_address, @errorName(err) });
+
+            // var w = stream.writer(io, &.{});
+            // _ = w.interface.write("connection to target failed") catch {};
+            // _ = w.interface.flush() catch {};
+            // stream.close(io);
+
+            // continue;
+        };
+    }
+};
