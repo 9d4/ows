@@ -235,8 +235,15 @@ const Handler = struct {
         allocator.destroy(self);
     }
 
-    pub fn notFound(_: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
-        const upgraded = try httpz.upgradeWebsocket(WebsocketHandler, req, res, WebsocketContext{});
+    pub fn notFound(self: *Handler, req: *httpz.Request, res: *httpz.Response) !void {
+        const stream = connectPeer(self) catch {
+            res.status = 500;
+            res.body = "Unable connect to peer";
+            return;
+        };
+
+        const ctx = WebsocketContext{ .io = self.io, .peer_stream = stream };
+        const upgraded = try httpz.upgradeWebsocket(WebsocketHandler, req, res, ctx);
         if (!upgraded) {
             res.status = 400;
             res.body = "Invalid websocket handshake";
@@ -248,33 +255,67 @@ const Handler = struct {
         res.body = "pong";
     }
 
-    const WebsocketContext = struct {};
+    const WebsocketContext = struct {
+        io: Io,
+        peer_stream: net.Stream,
+    };
 
     pub const WebsocketHandler = struct {
         conn: *httpz.websocket.Conn,
+        ctx: WebsocketContext,
 
-        pub fn init(conn: *httpz.websocket.Conn, _: WebsocketContext) !WebsocketHandler {
-            return .{ .conn = conn };
+        peer_writer: net.Stream.Writer = undefined,
+
+        pub fn init(conn: *httpz.websocket.Conn, ctx: WebsocketContext) !WebsocketHandler {
+            std.debug.print("Handler Init is called", .{});
+
+            var self = WebsocketHandler{
+                .conn = conn,
+                .ctx = ctx,
+            };
+
+            const writer = ctx.peer_stream.writer(ctx.io, &.{});
+            self.peer_writer = writer;
+
+            return self;
+        }
+
+        pub fn afterInit(self: *WebsocketHandler, _: WebsocketContext) !void {
+            _ = self.ctx.io.async(pipeNetStreamToWS, .{
+                self.ctx.io,
+                self.ctx.peer_stream,
+                self.conn,
+            });
         }
 
         pub fn clientMessage(self: *WebsocketHandler, data: []const u8) !void {
             try self.conn.write(data);
+            _ = try self.peer_writer.interface.write(data);
         }
     };
 
-    pub fn connectPeer(self: *Handler) !void {
-        _ = self.tcp_peer_address.connect(self.io, .{
+    pub fn connectPeer(self: *Handler) !net.Stream {
+        const stream = self.tcp_peer_address.connect(self.io, .{
             .mode = .stream,
             .protocol = .tcp,
         }) catch |err| {
             std.debug.print("connection to target failed: {f}: {s}\n\n", .{ self.tcp_peer_address, @errorName(err) });
-
-            // var w = stream.writer(io, &.{});
-            // _ = w.interface.write("connection to target failed") catch {};
-            // _ = w.interface.flush() catch {};
-            // stream.close(io);
-
-            // continue;
+            return err;
         };
+
+        return stream;
     }
 };
+
+fn pipeNetStreamToWS(io: Io, from: net.Stream, ws: *httpz.websocket.Conn) !void {
+    var buf: [1]u8 = undefined;
+    var reader = from.reader(io, &buf);
+
+    while (true) {
+        const b = try reader.interface.takeByte();
+        std.debug.print("READ from net peer stream\n", .{});
+        try ws.write(&[_]u8{b});
+    }
+
+    return;
+}
