@@ -82,7 +82,7 @@ fn runServe(io: Io, allocator: Allocator, args: ([]const [:0]const u8)) !void {
     const stdin_file = std.Io.File.stdin();
     var stdin = stdin_file.reader(io, &buf);
 
-    std.debug.print("Press ENTER to stop the server...\n", .{});
+    std.debug.print("Listening on {s} - Press ENTER to stop the server...\n", .{to});
     _ = try stdin.interface.takeDelimiterInclusive('\n');
     std.debug.print("Stopping server...\n", .{});
 }
