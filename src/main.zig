@@ -17,7 +17,7 @@ const Command = enum {
 
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
-    const args = try std.process.Args.toSlice(init.minimal.args, init.gpa);
+    const args = try std.process.Args.toSlice(init.minimal.args, init.arena.allocator());
 
     if (args.len < 2) return printUsage();
 
