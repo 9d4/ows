@@ -62,7 +62,7 @@ fn runServe(io: Io, allocator: Allocator, args: ([]const [:0]const u8)) !void {
 
     try srv.listen();
 
-    var buf: [128]u8 = undefined;
+    var buf: [64]u8 = undefined;
 
     const stdin_file = std.Io.File.stdin();
     var stdin = stdin_file.reader(io, &buf);
