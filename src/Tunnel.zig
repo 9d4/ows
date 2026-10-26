@@ -15,7 +15,7 @@ fn pipeStream(reader: *std.Io.Reader, writer: *std.Io.Writer) void {
     };
 }
 
-fn pipeNetStreamToWS(io: Io, from: net.Stream, ws: *httpz.websocket.Conn) !void {
+pub fn pipeNetStreamToWS(io: Io, from: net.Stream, ws: *httpz.websocket.Conn) !void {
     var buf: [1]u8 = undefined;
     var reader = from.reader(io, &buf);
 

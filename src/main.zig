@@ -46,6 +46,12 @@ fn printServeUsage() void {
     std.debug.print("  to            HTTP Address to listen to (eg. 127.0.0.1:33066)\n", .{});
 }
 
+const WkWk = struct {
+    captured: i64,
+
+    pub const init: WkWk = .{ .captured = 0 };
+};
+
 fn runServe(io: Io, allocator: Allocator, args: ([]const [:0]const u8)) !void {
     if (args.len < 3) {
         return printServeUsage();
@@ -62,12 +68,11 @@ fn runServe(io: Io, allocator: Allocator, args: ([]const [:0]const u8)) !void {
 
     try srv.listen();
 
-    var buf: [64]u8 = undefined;
+    std.debug.print("Bridging from {} to {}", .{ from_addr, to_addr });
 
-    const stdin_file = std.Io.File.stdin();
-    var stdin = stdin_file.reader(io, &buf);
+    var mu = std.Io.Mutex.init;
+    var cond = std.Io.Condition.init;
 
-    std.debug.print("Listening on {} - Press ENTER to stop the server...\n", .{srv});
-    _ = try stdin.interface.takeDelimiterInclusive('\n');
-    std.debug.print("Stopping server...\n", .{});
+    try mu.lock(io);
+    try cond.wait(io, &mu);
 }

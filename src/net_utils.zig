@@ -2,7 +2,7 @@ const std = @import("std");
 const Io = std.Io;
 const net = std.Io.net;
 
-fn parseLocation(loc: []const u8) !net.IpAddress {
+pub fn parseLocation(loc: []const u8) !net.IpAddress {
     const colon = std.mem.lastIndexOfScalar(u8, loc, ':');
     const host = loc[0..(colon orelse (loc.len - 1))];
     const port_str: []const u8 = if (colon) |idx| loc[idx + 1 ..] else "0";
