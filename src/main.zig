@@ -53,7 +53,7 @@ const WkWk = struct {
 };
 
 fn runServe(io: Io, allocator: Allocator, args: ([]const [:0]const u8)) !void {
-    if (args.len < 3) {
+    if (args.len != 3) {
         return printServeUsage();
     }
 
