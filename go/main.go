@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -52,6 +53,13 @@ func printServeUsage() {
 	fmt.Print("  to            HTTP Address to listen to (eg. 127.0.0.1:33066)\n")
 }
 
+func printConnectUsage() {
+	fmt.Print("Usage: ows connect <from> [to]\n\n")
+	fmt.Print("Args:\n")
+	fmt.Print("  from          Websocket server address (eg. ws://localhost:33066)\n")
+	fmt.Print("  to            Address to listen forwarded connection (eg. 127.0.0.1:3306)\n")
+}
+
 func execServe(args []string) {
 	if len(args) < 1 {
 		printServeUsage()
@@ -79,7 +87,42 @@ func execServe(args []string) {
 }
 
 func execConnect(args []string) {
-	panic("unimplemented")
+	if len(args) < 1 {
+		printServeUsage()
+		return
+	}
+
+	knownSchemes := []string{"ws", "wss", "http", "https"}
+	hasScheme := false
+	for _, s := range knownSchemes {
+		hasScheme = strings.HasPrefix(args[0], s+"://")
+		if hasScheme {
+			continue
+		}
+	}
+
+	// Set default scheme to ws://
+	if !hasScheme {
+		args[0] = "ws://" + args[0]
+	}
+
+	from, err := url.Parse(args[0])
+	if err != nil {
+		log.Fatalf("parse from: %v", err)
+	}
+
+	to := &net.TCPAddr{IP: net.IPv6zero}
+	if len(args) > 1 {
+		to, err = net.ResolveTCPAddr("tcp6", args[1])
+		if err != nil {
+			log.Fatalf("parse to: %v", err)
+		}
+	}
+
+	err = connectListen(from, to)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 func serveListen(from *net.TCPAddr, to *net.TCPAddr) error {
@@ -209,40 +252,33 @@ func (h *ServeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	l.Debug("connected to peer")
 	ctx, cancel := context.WithCancel(context.Background())
 
-	writer := func(p []byte) (n int, err error) {
-		n = len(p)
-		err = conn.WriteMessage(websocket.TextMessage, p)
-		l.Debug("writing to websocket", "len", n, "err", err)
-		l.Debug(fmt.Sprintf("peer -> conn: %d bytes", n))
-		l.Debug("===================================")
-		for line := range strings.SplitSeq(string(p), "\r") {
-			l.Debug(line)
+	wsReader := ReaderFunc(func(p []byte) (n int, err error) {
+		t, msg, err := conn.ReadMessage()
+		if err != nil {
+			l.Error("error reading from websocket", "err", err)
+			cancel()
+			return 0, err
 		}
-		l.Debug("===================================")
-		return
-	}
 
-	msg := `GET / HTTP/1.1
-Host: localhost:5173
-User-Agent: curl/8.20.0
-Accept: */*
-Transfer-Encoding: chunked0\r\n\r\n
-`
-
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		l.Debug("writing HTTP to peer", "msg", msg)
-
-		if _, err := peer.Write([]byte(msg)); err != nil {
-			l.Error("writing to peer", "err", err)
+		l.Debug("received message from websocket", "type", t, "len", len(msg))
+		return copy(p, msg), nil
+	})
+	wsWriter := WriterFunc(func(p []byte) (n int, err error) {
+		err = conn.WriteMessage(websocket.BinaryMessage, p)
+		if err != nil {
+			l.Error("error writing to websocket", "err", err)
+			cancel()
+			return 0, err
 		}
-		_ = writer
-	}()
+
+		l.Debug("wrote message to websocket", "len", len(p))
+		return len(p), nil
+	})
 
 	go func() {
 		defer cancel()
 
-		_, err := io.Copy(WriterFunc(writer), peer)
+		_, err := io.Copy(wsWriter, peer)
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
 				l.Info("conn closed")
@@ -252,27 +288,120 @@ Transfer-Encoding: chunked0\r\n\r\n
 		}
 	}()
 
-	// go func() {
-	// 	defer cancel()
-	//
-	// 	_, err := io.Copy(peer, conn.NetConn())
-	// 	if err != nil {
-	// 		if errors.Is(err, net.ErrClosed) {
-	// 			l.Info("peer closed")
-	// 			return
-	// 		}
-	// 		l.Error("copying conn write to peer", "err", err)
-	// 	}
-	// }()
+	go func() {
+		defer cancel()
+
+		_, err := io.Copy(peer, wsReader)
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				l.Info("peer closed")
+				return
+			}
+			l.Error("copying conn write to peer", "err", err)
+		}
+	}()
 
 	<-ctx.Done()
-	l.Info("closing both connections")
 	peer.Close()
 	conn.Close()
+	l.Info("connections closed")
 }
 
 type WriterFunc func(p []byte) (n int, err error)
 
 func (f WriterFunc) Write(p []byte) (n int, err error) {
 	return f(p)
+}
+
+type ReaderFunc func(p []byte) (n int, err error)
+
+func (f ReaderFunc) Read(p []byte) (n int, err error) {
+	return f(p)
+}
+
+func connectListen(uri *url.URL, to *net.TCPAddr) error {
+	lis, err := net.ListenTCP("tcp", to)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", to, err)
+	}
+
+	log.Printf("Listening on %s", lis.Addr())
+	log.Printf("Forwarding to %s", uri.String())
+
+	for {
+		conn, err := lis.Accept()
+		if err != nil {
+			log.Printf("error accepting connection: %s", err)
+			continue
+		}
+
+		go connectHandleConn(conn, uri)
+	}
+}
+
+func connectHandleConn(conn net.Conn, uri *url.URL) {
+	l := slog.With(
+		slog.String("remote", conn.RemoteAddr().String()),
+		slog.String("uri", uri.String()),
+	)
+	l.Info("handling connection")
+
+	ws, _, err := websocket.DefaultDialer.Dial(uri.String(), nil)
+	if err != nil {
+		l.Error("cannot connect to websocket server", "err", err)
+		l.Info("closing connection")
+		conn.Close()
+		return
+	}
+
+	l.Debug("connected to websocket server")
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	wsReader := ReaderFunc(func(p []byte) (n int, err error) {
+		t, msg, err := ws.ReadMessage()
+		if err != nil {
+			l.Error("error reading from websocket", "err", err)
+			cancel()
+			return 0, err
+		}
+
+		l.Debug("received message from websocket", "type", t, "len", len(msg))
+		return copy(p, msg), nil
+	})
+	wsWriter := WriterFunc(func(p []byte) (n int, err error) {
+		err = ws.WriteMessage(websocket.BinaryMessage, p)
+		if err != nil {
+			l.Error("error writing to websocket", "err", err)
+			cancel()
+			return 0, err
+		}
+
+		l.Debug("wrote message to websocket", "len", len(p))
+		return len(p), nil
+	})
+
+	go func() {
+		defer cancel()
+
+		_, err = io.Copy(conn, wsReader)
+		if err != nil {
+			l.Error("copying websocket -> conn", "err", err)
+		}
+	}()
+
+	go func() {
+		defer cancel()
+
+		_, err = io.Copy(wsWriter, conn)
+		if err != nil {
+			l.Error("copying conn -> websocket", "err", err)
+		}
+	}()
+
+	<-ctx.Done()
+	ws.Close()
+	conn.Close()
+
+	l.Info("connections closed")
 }
