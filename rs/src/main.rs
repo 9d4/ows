@@ -1,5 +1,5 @@
 use std::{
-    io::{ErrorKind, Read},
+    io::{BufRead, BufReader, ErrorKind},
     net::{TcpListener, TcpStream},
 };
 
@@ -16,7 +16,7 @@ fn main() {
 
     loop {
         let accept_res = ln.accept();
-        let (mut stream, addr) = match accept_res {
+        let (stream, addr) = match accept_res {
             Ok(res) => res,
             Err(err) => match err.kind() {
                 ErrorKind::ConnectionReset
@@ -27,25 +27,24 @@ fn main() {
         };
 
         println!("handling one connection from {}", addr.to_string());
-        handle_stream(&mut stream);
+        handle_stream(stream);
     }
 }
 
-fn handle_stream(s: &mut TcpStream) {
-    'read: loop {
-        let mut buf = [0u8; 1024];
+fn handle_stream(s: TcpStream) {
+    let reader = BufReader::new(&s);
 
-        match s.read(&mut buf) {
-            Ok(0) => return,
-            Ok(n) => {
-                println!("read {}bytes", n);
+    for line in reader.lines() {
+        match line {
+            Ok(val) => {
+                println!("<< {}", val);
             }
             Err(err) => {
                 println!("error reading: {}", err);
-                break 'read;
+                break;
             }
         };
-
-        println!("<< {}", String::from_utf8_lossy(&buf));
     }
+
+    println!("done");
 }
