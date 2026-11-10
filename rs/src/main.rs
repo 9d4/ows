@@ -1,11 +1,10 @@
-use std::{
-    io::{BufRead, BufReader, ErrorKind},
-    net::{TcpListener, TcpStream},
-};
+use tokio::io::{AsyncBufReadExt, BufReader, ErrorKind};
+use tokio::net::{TcpListener, TcpStream};
 
-fn main() {
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     let addr = "localhost:1212";
-    let ln_res = TcpListener::bind(addr);
+    let ln_res = TcpListener::bind(addr).await;
 
     let ln = match ln_res {
         Ok(val) => val,
@@ -15,8 +14,8 @@ fn main() {
     println!("listening on {}", addr);
 
     loop {
-        let accept_res = ln.accept();
-        let (stream, addr) = match accept_res {
+        let accept_res = ln.accept().await;
+        let (stream, _) = match accept_res {
             Ok(res) => res,
             Err(err) => match err.kind() {
                 ErrorKind::ConnectionReset
@@ -26,25 +25,31 @@ fn main() {
             },
         };
 
-        println!("handling one connection from {}", addr.to_string());
-        handle_stream(stream);
+        tokio::spawn(handle_stream(stream));
     }
 }
 
-fn handle_stream(s: TcpStream) {
-    let reader = BufReader::new(&s);
+async fn handle_stream(mut s: TcpStream) {
+    let addr = match s.peer_addr() {
+        Ok(v) => v.to_string(),
+        Err(_) => String::from("unknown"),
+    };
 
-    for line in reader.lines() {
-        match line {
-            Ok(val) => {
-                println!("<< {}", val);
+    println!("handling connection from {}", addr);
+
+    let mut lines = BufReader::new(&mut s).lines();
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                println!("[{}]<< {}", addr, line);
             }
+            Ok(_) => break,
             Err(err) => {
                 println!("error reading: {}", err);
                 break;
             }
-        };
+        }
     }
 
-    println!("done");
+    println!("done {}", addr);
 }
