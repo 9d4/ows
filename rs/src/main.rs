@@ -1,8 +1,13 @@
+mod cmd;
+
+use cmd::Ows;
 use tokio::io::{AsyncBufReadExt, BufReader, ErrorKind};
 use tokio::net::{TcpListener, TcpStream};
 
-#[tokio::main]
+#[tokio::main(worker_threads = 1)]
 async fn main() -> std::io::Result<()> {
+    Ows::parse();
+
     let addr = "localhost:1212";
     let ln_res = TcpListener::bind(addr).await;
 
