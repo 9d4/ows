@@ -3,11 +3,18 @@ mod cmd;
 use cmd::Ows;
 use tokio::io::{AsyncBufReadExt, BufReader, ErrorKind};
 use tokio::net::{TcpListener, TcpStream};
+use usage_rs::Run;
 
 #[tokio::main(worker_threads = 1)]
-async fn main() -> std::io::Result<()> {
-    Ows::parse();
+async fn main() {
+    if let Err(err) = Ows::parse().command.run() {
+        eprintln!("error: {err}");
+        std::process::exit(1);
+    }
+}
 
+#[allow(dead_code)]
+async fn serve() {
     let addr = "localhost:1212";
     let ln_res = TcpListener::bind(addr).await;
 
