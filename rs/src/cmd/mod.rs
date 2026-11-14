@@ -11,7 +11,7 @@ pub(crate) struct Ows {
 }
 
 #[derive(Subcommands)]
-#[usage(run)]
+#[usage(run_async)]
 pub(crate) enum Commands {
     Serve(Serve),
 }

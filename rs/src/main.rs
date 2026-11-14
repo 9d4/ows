@@ -3,11 +3,11 @@ mod cmd;
 use cmd::Ows;
 use tokio::io::{AsyncBufReadExt, BufReader, ErrorKind};
 use tokio::net::{TcpListener, TcpStream};
-use usage_rs::Run;
+use usage_rs::RunAsync;
 
 #[tokio::main(worker_threads = 1)]
 async fn main() {
-    if let Err(err) = Ows::parse().command.run() {
+    if let Err(err) = Ows::parse().command.run_async().await {
         eprintln!("error: {err}");
         std::process::exit(1);
     }
