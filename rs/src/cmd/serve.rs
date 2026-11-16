@@ -2,9 +2,10 @@ use std::{
     error::Error,
     io::ErrorKind,
     net::{SocketAddr, ToSocketAddrs},
+    sync::Arc,
 };
 use tokio::{
-    io::{AsyncBufReadExt, BufReader},
+    io::{self, AsyncReadExt, AsyncWriteExt, BufReader},
     net::{TcpListener, TcpStream},
 };
 use usage_rs::{Args, RunAsync};
@@ -52,7 +53,7 @@ impl RunAsync for Serve {
     type Output = Result<(), Box<dyn Error>>;
 
     async fn run_async(self) -> Self::Output {
-        let from = self.from()?;
+        let from = Arc::new(self.from()?);
         println!("forwarding to {from}");
 
         let ln = TcpListener::bind(self.to()?).await?;
@@ -71,34 +72,61 @@ impl RunAsync for Serve {
                 },
             };
 
-            tokio::spawn(handle_stream(stream));
+            let from = Arc::clone(&from);
+            tokio::spawn(handle_stream(stream, from));
         }
-
-        // Ok(())
     }
 }
 
-async fn handle_stream(mut s: TcpStream) {
+async fn handle_stream(s: TcpStream, peer: Arc<SocketAddr>) {
     let addr = match s.peer_addr() {
         Ok(v) => v.to_string(),
         Err(_) => String::from("unknown"),
     };
 
     println!("handling connection from {}", addr);
+    println!("connecting to {}", peer);
 
-    let mut lines = BufReader::new(&mut s).lines();
-    loop {
-        match lines.next_line().await {
-            Ok(Some(line)) => {
-                println!("[{}]<< {}", addr, line);
-            }
-            Ok(_) => break,
-            Err(err) => {
-                println!("error reading: {}", err);
-                break;
-            }
+    let upstream = match TcpStream::connect(peer.to_string()).await {
+        Ok(s) => s,
+        Err(err) => {
+            eprint!("error connecting to {}: {}", peer.to_string(), err);
+            return;
         }
-    }
+    };
+
+    let (upstream_reader, mut upstream_writer) = io::split(upstream);
+    let (stream_reader, mut stream_writer) = io::split(s);
+
+    tokio::spawn(async move {
+        let mut r = BufReader::new(upstream_reader);
+        loop {
+            let b = match r.read_u8().await {
+                Ok(b) => b,
+                Err(err) => {
+                    println!("error reading upstream: {}", err);
+                    return;
+                }
+            };
+
+            let _ = stream_writer.write_u8(b).await;
+        }
+    });
+
+    tokio::spawn(async move {
+        let mut r = BufReader::new(stream_reader);
+        loop {
+            let b = match r.read_u8().await {
+                Ok(b) => b,
+                Err(err) => {
+                    println!("error reading upstream: {}", err);
+                    return;
+                }
+            };
+
+            let _ = upstream_writer.write_u8(b).await;
+        }
+    });
 
     println!("done {}", addr);
 }
