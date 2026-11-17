@@ -10,6 +10,8 @@ use tokio::{
 };
 use usage_rs::{Args, RunAsync};
 
+use crate::serve::listen_websocket;
+
 /// Serve any tcp server as websocket
 #[derive(Args)]
 pub(crate) struct Serve {
@@ -55,6 +57,8 @@ impl RunAsync for Serve {
     async fn run_async(self) -> Self::Output {
         let from = Arc::new(self.from()?);
         println!("forwarding to {from}");
+
+        let _ = listen_websocket(self.to()?, *from).await?;
 
         let ln = TcpListener::bind(self.to()?).await?;
         let listen_addr = ln.local_addr()?;

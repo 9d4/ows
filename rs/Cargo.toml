@@ -6,3 +6,5 @@ edition = "2024"
 [dependencies]
 tokio = { version = "1.54.1", features = ["full"] }
 usage-rs = "7.3.0"
+tokio-tungstenite = "0.30"
+futures-util = "0.3.34"
