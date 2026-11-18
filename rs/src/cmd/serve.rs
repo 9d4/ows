@@ -66,7 +66,7 @@ impl RunAsync for Serve {
 
         loop {
             let accept_res = ln.accept().await;
-            let (stream, _) = match accept_res {
+            let (_, _) = match accept_res {
                 Ok(res) => res,
                 Err(err) => match err.kind() {
                     ErrorKind::ConnectionReset
@@ -75,62 +75,6 @@ impl RunAsync for Serve {
                     _ => panic!("error accepting connection: {}", err),
                 },
             };
-
-            let from = Arc::clone(&from);
-            tokio::spawn(handle_stream(stream, from));
         }
     }
-}
-
-async fn handle_stream(s: TcpStream, peer: Arc<SocketAddr>) {
-    let addr = match s.peer_addr() {
-        Ok(v) => v.to_string(),
-        Err(_) => String::from("unknown"),
-    };
-
-    println!("handling connection from {}", addr);
-    println!("connecting to {}", peer);
-
-    let upstream = match TcpStream::connect(peer.to_string()).await {
-        Ok(s) => s,
-        Err(err) => {
-            eprint!("error connecting to {}: {}", peer.to_string(), err);
-            return;
-        }
-    };
-
-    let (upstream_reader, mut upstream_writer) = io::split(upstream);
-    let (stream_reader, mut stream_writer) = io::split(s);
-
-    tokio::spawn(async move {
-        let mut r = BufReader::new(upstream_reader);
-        loop {
-            let b = match r.read_u8().await {
-                Ok(b) => b,
-                Err(err) => {
-                    println!("error reading upstream: {}", err);
-                    return;
-                }
-            };
-
-            let _ = stream_writer.write_u8(b).await;
-        }
-    });
-
-    tokio::spawn(async move {
-        let mut r = BufReader::new(stream_reader);
-        loop {
-            let b = match r.read_u8().await {
-                Ok(b) => b,
-                Err(err) => {
-                    println!("error reading upstream: {}", err);
-                    return;
-                }
-            };
-
-            let _ = upstream_writer.write_u8(b).await;
-        }
-    });
-
-    println!("done {}", addr);
 }
