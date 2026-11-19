@@ -1,12 +1,7 @@
 use std::{
     error::Error,
-    io::ErrorKind,
     net::{SocketAddr, ToSocketAddrs},
     sync::Arc,
-};
-use tokio::{
-    io::{self, AsyncReadExt, AsyncWriteExt, BufReader},
-    net::{TcpListener, TcpStream},
 };
 use usage_rs::{Args, RunAsync};
 
@@ -60,21 +55,23 @@ impl RunAsync for Serve {
 
         let _ = listen_websocket(self.to()?, *from).await?;
 
-        let ln = TcpListener::bind(self.to()?).await?;
-        let listen_addr = ln.local_addr()?;
-        println!("listening on {}", listen_addr.to_string());
+        Ok(())
 
-        loop {
-            let accept_res = ln.accept().await;
-            let (_, _) = match accept_res {
-                Ok(res) => res,
-                Err(err) => match err.kind() {
-                    ErrorKind::ConnectionReset
-                    | ErrorKind::ConnectionAborted
-                    | ErrorKind::ConnectionRefused => continue,
-                    _ => panic!("error accepting connection: {}", err),
-                },
-            };
-        }
+        // let ln = TcpListener::bind(self.to()?).await?;
+        // let listen_addr = ln.local_addr()?;
+        // println!("listening on {}", listen_addr.to_string());
+        //
+        // loop {
+        //     let accept_res = ln.accept().await;
+        //     let (_, _) = match accept_res {
+        //         Ok(res) => res,
+        //         Err(err) => match err.kind() {
+        //             ErrorKind::ConnectionReset
+        //             | ErrorKind::ConnectionAborted
+        //             | ErrorKind::ConnectionRefused => continue,
+        //             _ => panic!("error accepting connection: {}", err),
+        //         },
+        //     };
+        // }
     }
 }
