@@ -2,11 +2,11 @@ use std::{error::Error, net::SocketAddr, sync::Arc};
 
 use futures_util::{SinkExt, StreamExt, TryStreamExt, future};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufReader},
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 use tokio_tungstenite::tungstenite::{Bytes, Message};
-use tokio_util::{future::FutureExt, sync::CancellationToken};
+use tokio_util::sync::CancellationToken;
 
 pub async fn listen_websocket(
     addr: SocketAddr,
