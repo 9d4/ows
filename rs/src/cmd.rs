@@ -1,5 +1,7 @@
+mod connect;
 mod serve;
 
+use connect::Connect;
 use serve::Serve;
 use usage_rs::{Cli, Subcommands};
 
@@ -14,4 +16,5 @@ pub(crate) struct Ows {
 #[usage(run_async)]
 pub(crate) enum Commands {
     Serve(Serve),
+    Connect(Connect),
 }

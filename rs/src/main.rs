@@ -1,4 +1,5 @@
 mod cmd;
+mod connect;
 mod serve;
 
 use cmd::Ows;
