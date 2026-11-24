@@ -97,7 +97,7 @@ func execConnect(args []string) {
 	for _, s := range knownSchemes {
 		hasScheme = strings.HasPrefix(args[0], s+"://")
 		if hasScheme {
-			continue
+			break
 		}
 	}
 
