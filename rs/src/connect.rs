@@ -87,27 +87,27 @@ async fn copy_tcp_to_ws(
             break;
         }
     }
+
+    println!("tcp -> ws done");
 }
 
 async fn copy_ws_to_tcp(
     mut ws_reader: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     mut tcp_writer: tokio::net::tcp::OwnedWriteHalf,
 ) {
-    loop {
-        let mut read = ws_reader
-            .by_ref()
-            .try_filter(|m| future::ready(m.is_binary()));
+    let mut read = ws_reader
+        .by_ref()
+        .try_filter(|m| future::ready(m.is_binary()));
 
-        while let Some(m) = read.next().await {
-            let msg = match m {
-                Ok(m) => m,
-                Err(_) => {
-                    break;
-                }
-            };
+    while let Some(m) = read.next().await {
+        let msg = match m {
+            Ok(m) => m,
+            Err(_) => {
+                break;
+            }
+        };
 
-            let mut buf = msg.into_data();
-            let _ = tcp_writer.write_buf(&mut buf);
-        }
+        let mut buf = msg.into_data();
+        let _ = tcp_writer.write_buf(&mut buf).await;
     }
 }
