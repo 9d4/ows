@@ -6,7 +6,10 @@ use futures_util::{
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    net::{
+        TcpListener, TcpStream,
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+    },
 };
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream,
@@ -61,7 +64,7 @@ async fn accept_connection(stream: TcpStream, peer_address: Arc<String>) {
 }
 
 async fn copy_tcp_to_ws(
-    mut tcp_reader: tokio::net::tcp::OwnedReadHalf,
+    mut tcp_reader: OwnedReadHalf,
     mut ws_writer: SplitSink<
         tokio_tungstenite::WebSocketStream<MaybeTlsStream<TcpStream>>,
         Message,
@@ -93,7 +96,7 @@ async fn copy_tcp_to_ws(
 
 async fn copy_ws_to_tcp(
     mut ws_reader: SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>,
-    mut tcp_writer: tokio::net::tcp::OwnedWriteHalf,
+    mut tcp_writer: OwnedWriteHalf,
 ) {
     let mut read = ws_reader
         .by_ref()
